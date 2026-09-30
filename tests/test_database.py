@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from scripts.init_db import initialize
+from scripts.migrate_db import migrate
 from scripts.release_revision import release
 
 
@@ -214,6 +215,80 @@ class DocumentControlTests(unittest.TestCase):
                 connection.execute("UPDATE controlled_copies SET status='ISSUED'")
             connection.execute("UPDATE controlled_copies SET revision_id=2, status='ISSUED'")
             self.assertEqual(connection.execute('SELECT revision_id FROM controlled_copies').fetchone()[0], 2)
+
+
+class MigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db = Path(self.tempdir.name) / "control.db"
+        initialize(self.db)
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.executescript((ROOT / "examples" / "sample_data.sql").read_text())
+            connection.executescript(
+                """DROP TRIGGER protect_released_revision_content;
+                   DROP TRIGGER enforce_revision_lifecycle;
+                   DROP TRIGGER prevent_insert_released_revision;
+                   DROP TRIGGER prevent_copy_update_to_unreleased_revision;
+                   CREATE TRIGGER protect_released_revision_content
+                   BEFORE UPDATE OF document_id, revision_code, change_summary,
+                                    content_uri, content_sha256, author_id
+                   ON document_revisions
+                   WHEN OLD.status IN ('RELEASED', 'SUPERSEDED', 'OBSOLETE')
+                   BEGIN
+                       SELECT RAISE(ABORT, 'released revision content is immutable; create a new revision');
+                   END;
+                   DELETE FROM schema_versions WHERE version = 2;"""
+            )
+        finally:
+            connection.close()
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def test_migration_preserves_data_installs_controls_and_is_idempotent(self):
+        version, backup_path = migrate(self.db)
+        self.assertEqual(version, 2)
+        self.assertIsNotNone(backup_path)
+        self.assertTrue(backup_path.is_file())
+
+        connection = sqlite3.connect(self.db)
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            self.assertEqual(connection.execute("SELECT title FROM documents").fetchone()[0],
+                             "Control of Documented Information")
+            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+            installed = connection.execute(
+                """SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN
+                   ('protect_released_revision_content', 'enforce_revision_lifecycle',
+                    'prevent_insert_released_revision',
+                    'prevent_copy_update_to_unreleased_revision')"""
+            ).fetchone()[0]
+            self.assertEqual(installed, 4)
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"):
+                connection.execute(
+                    "UPDATE document_revisions SET content_uri='changed' WHERE revision_id=1"
+                )
+        finally:
+            connection.close()
+
+        backup_connection = sqlite3.connect(backup_path)
+        try:
+            self.assertEqual(backup_connection.execute(
+                "SELECT MAX(version) FROM schema_versions"
+            ).fetchone()[0], 1)
+        finally:
+            backup_connection.close()
+
+        version, second_backup = migrate(self.db)
+        self.assertEqual(version, 2)
+        self.assertIsNone(second_backup)
+
+    def test_migration_can_skip_backup(self):
+        version, backup_path = migrate(self.db, backup=False)
+        self.assertEqual(version, 2)
+        self.assertIsNone(backup_path)
 
 
 if __name__ == "__main__":

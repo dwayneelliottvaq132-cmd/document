@@ -1,5 +1,6 @@
 *.db
 *.db-shm
 *.db-wal
+*.db.pre-v*.bak
 __pycache__/
 *.py[cod]

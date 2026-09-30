@@ -400,6 +400,8 @@ LEFT JOIN change_requests cr ON cr.change_request_id = l.change_request_id
 LEFT JOIN audit_findings af ON af.finding_id = l.finding_id;
 
 INSERT INTO schema_versions(version, description)
-VALUES (1, 'Initial aerospace document control schema');
+VALUES
+  (1, 'Initial aerospace document control schema'),
+  (2, 'Harden revision lifecycle, reviewed content, and controlled-copy updates');
 
 COMMIT;

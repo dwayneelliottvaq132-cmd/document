@@ -31,6 +31,18 @@ The initializer applies `sql/schema.sql`, enables foreign keys, and records the
 schema version. It refuses to overwrite an existing database unless `--force` is
 provided.
 
+To upgrade an existing version-1 database in place:
+
+```bash
+python scripts/migrate_db.py document_control.db
+```
+
+The migrator creates a timestamped SQLite backup beside the database before it
+changes anything, applies each pending migration in order, and checks database
+integrity and foreign keys. Keep the backup until the upgraded database has been
+validated in your environment. `--no-backup` is available for disposable databases.
+Running the command again is safe and reports that no changes are needed.
+
 ## Core workflow
 
 1. Create a row in `documents` with a stable document number and named owner.
@@ -61,9 +73,9 @@ rejected without changing the current revision; run the release when the new
 revision becomes effective. Scheduled activation is not implemented. Training
 assignment coverage is required for release; completion remains tracked separately.
 
-These schema changes apply to newly initialized databases. Existing databases
-retain their original triggers; do not use `--force` on a populated database to
-upgrade it. A separate migration is required before using these controls there.
+Existing databases retain their original controls until upgraded with
+`scripts/migrate_db.py`. Do not use `init_db.py --force` on a populated database;
+that replaces the database instead of migrating it.
 
 ## Useful views
 
@@ -97,7 +109,9 @@ central identity, or formal electronic signatures are required.
 
 - `sql/schema.sql` — normalized schema, constraints, indexes, triggers, and views.
 - `scripts/init_db.py` — safe database bootstrap command.
+- `scripts/migrate_db.py` — backup and ordered in-place schema migration command.
 - `scripts/release_revision.py` — controlled, transactional revision release.
+- `sql/migrations/` — ordered upgrades for existing databases.
 - `examples/sample_data.sql` — fictional starter roles, users, and a procedure.
 - `tests/test_database.py` — workflow and control tests.
 - `docs/data-dictionary.md` — table-by-table data dictionary.
