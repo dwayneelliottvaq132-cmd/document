@@ -8,6 +8,15 @@ from pathlib import Path
 
 
 def release(database: Path, revision_id: int, releaser_id: int, effective_at: str) -> None:
+    # Date-only and naive date/time inputs are interpreted in UTC.
+    try:
+        effective = dt.datetime.fromisoformat(effective_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("effective date must be a valid ISO 8601 date/time") from exc
+    if effective.tzinfo is None:
+        effective = effective.replace(tzinfo=dt.timezone.utc)
+    if effective > dt.datetime.now(dt.timezone.utc):
+        raise ValueError("future effective dates are not supported; release when effective")
     connection = sqlite3.connect(database)
     connection.execute("PRAGMA foreign_keys = ON")
     try:
@@ -40,15 +49,16 @@ def release(database: Path, revision_id: int, releaser_id: int, effective_at: st
         if required_roles:
             assignments = connection.execute(
                 """SELECT COUNT(*) FROM revision_training_requirements rr
+                   JOIN user_roles ur ON ur.role_id = rr.role_id
+                   JOIN users u ON u.user_id = ur.user_id AND u.active = 1
                    WHERE rr.revision_id = ? AND NOT EXISTS (
-                     SELECT 1 FROM user_roles ur
-                     JOIN training_assignments ta ON ta.user_id = ur.user_id
-                     WHERE ur.role_id = rr.role_id AND ta.revision_id = rr.revision_id
+                     SELECT 1 FROM training_assignments ta
+                     WHERE ta.user_id = ur.user_id AND ta.revision_id = rr.revision_id
                    )""",
                 (revision_id,),
             ).fetchone()[0]
             if assignments:
-                raise ValueError("training assignments have not been generated for every affected role")
+                raise ValueError("training assignments are required for every active affected user")
 
         now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
         connection.execute(
@@ -91,7 +101,8 @@ def main() -> None:
     parser.add_argument("database", type=Path)
     parser.add_argument("revision_id", type=int)
     parser.add_argument("releaser_id", type=int)
-    parser.add_argument("--effective", required=True, help="ISO 8601 effective date/time")
+    parser.add_argument("--effective", required=True,
+                        help="ISO 8601 date/time, not in the future (naive values use UTC)")
     args = parser.parse_args()
     release(args.database, args.revision_id, args.releaser_id, args.effective)
     print(f"Released revision {args.revision_id}")

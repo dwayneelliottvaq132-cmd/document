@@ -42,15 +42,28 @@ provided.
    required before independent work.
 5. Move the revision to `IN_REVIEW`, obtain approvals, then set it to `APPROVED`.
 6. Release it with `scripts/release_revision.py`. The transactional release check
-   blocks missing approvals and training requirements, supersedes the old revision,
+   blocks missing approvals and missing training assignments for any active member
+   of an affected role, supersedes the old revision,
    and makes the released revision the document's current revision.
 7. Issue controlled copies through `controlled_copies`; recall or replace them when
    a new revision is released.
 
-Do not update released revision content in place. Create a new revision instead.
-Database triggers reject edits to identifying/content fields of released or
-superseded revisions and reject direct release-state changes that bypass the
-release tool.
+Content is frozen once a revision enters `IN_REVIEW` or has an approved decision.
+Create a new revision if reviewed content needs correction. States move forward
+through `DRAFT`, `IN_REVIEW`, `APPROVED`, `RELEASED`, and `SUPERSEDED`; a revision
+can also be retired as `OBSOLETE`. Review and release states cannot return to draft.
+Triggers reject direct inserts of released revisions and validate controlled-copy
+revision changes and reissuance, while allowing recall of superseded copies.
+
+The release tool accepts an ISO 8601 effective date/time at or before the current
+time. Date-only and timezone-free values use UTC. Future effective dates are
+rejected without changing the current revision; run the release when the new
+revision becomes effective. Scheduled activation is not implemented. Training
+assignment coverage is required for release; completion remains tracked separately.
+
+These schema changes apply to newly initialized databases. Existing databases
+retain their original triggers; do not use `--force` on a populated database to
+upgrade it. A separate migration is required before using these controls there.
 
 ## Useful views
 
