@@ -1,12 +1,16 @@
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import contextmanager
+from http.client import HTTPConnection
 from pathlib import Path
+from urllib.parse import urlencode
 
 from scripts.init_db import initialize
 from scripts.migrate_db import migrate
 from scripts.release_revision import release
+from scripts.web_app import build_server
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -289,6 +293,96 @@ class MigrationTests(unittest.TestCase):
         version, backup_path = migrate(self.db, backup=False)
         self.assertEqual(version, 2)
         self.assertIsNone(backup_path)
+
+
+class WebAppTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db = Path(self.tempdir.name) / "control.db"
+        initialize(self.db)
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.executescript((ROOT / "examples" / "sample_data.sql").read_text())
+        finally:
+            connection.close()
+        self.server = build_server(self.db, 0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.tempdir.cleanup()
+
+    def request(self, method, path, values=None):
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        body = None
+        headers = {}
+        if values is not None:
+            values = {**values, "csrf": self.server.csrf_token}
+            body = urlencode(values)
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        connection.request(method, path, body, headers)
+        response = connection.getresponse()
+        content = response.read().decode()
+        result = (response.status, dict(response.getheaders()), content)
+        connection.close()
+        return result
+
+    def test_dashboard_document_and_training_pages(self):
+        for path, expected in (("/", "Document assurance"), ("/documents", "QP-001"),
+                               ("/documents/1", "Revision A"), ("/training", "Sam Operator"),
+                               ("/copies", "Controlled copies")):
+            with self.subTest(path=path):
+                status, headers, content = self.request("GET", path)
+                self.assertEqual(status, 200)
+                self.assertIn(expected, content)
+                self.assertIn("Content-Security-Policy", headers)
+
+    def test_release_copy_and_training_workflow(self):
+        status, headers, _ = self.request("POST", "/revisions/1/release", {
+            "releaser_id": "3", "effective_at": "2000-01-01"
+        })
+        self.assertEqual(status, 303)
+        self.assertIn("Revision%20released", headers["Location"])
+
+        status, _, _ = self.request("POST", "/copies", {
+            "copy_number": "COPY-UI-1", "revision_id": "1", "holder_id": "4",
+            "location": "Heat treat line", "medium": "PAPER", "issued_by": "3"
+        })
+        self.assertEqual(status, 303)
+        status, _, _ = self.request("POST", "/copies/1/recall", {})
+        self.assertEqual(status, 303)
+        status, _, _ = self.request("POST", "/training/1/complete", {
+            "evidence_uri": "repository://training/QP-001-A-E1004.pdf"
+        })
+        self.assertEqual(status, 303)
+
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute(
+                "SELECT status FROM document_revisions WHERE revision_id=1"
+            ).fetchone()[0], "RELEASED")
+            self.assertEqual(connection.execute(
+                "SELECT status FROM controlled_copies WHERE copy_number='COPY-UI-1'"
+            ).fetchone()[0], "RECALLED")
+            self.assertIsNotNone(connection.execute(
+                "SELECT completed_at FROM training_assignments WHERE assignment_id=1"
+            ).fetchone()[0])
+        finally:
+            connection.close()
+
+    def test_csrf_protection_rejects_write(self):
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        body = urlencode({"document_number": "BAD"})
+        connection.request("POST", "/documents/new", body,
+                           {"Content-Type": "application/x-www-form-urlencoded"})
+        response = connection.getresponse()
+        content = response.read().decode()
+        connection.close()
+        self.assertEqual(response.status, 400)
+        self.assertIn("form expired", content)
 
 
 if __name__ == "__main__":

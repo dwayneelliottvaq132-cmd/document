@@ -43,6 +43,29 @@ integrity and foreign keys. Keep the backup until the upgraded database has been
 validated in your environment. `--no-backup` is available for disposable databases.
 Running the command again is safe and reports that no changes are needed.
 
+## Local web interface
+
+Start the browser interface against an initialized or migrated database:
+
+```bash
+python scripts/web_app.py document_control.db
+```
+
+Then open `http://127.0.0.1:8765`. The dependency-free interface provides:
+
+- dashboard metrics and recent release activity;
+- document search, master-record creation, and revision history;
+- draft creation, review decisions, approval, and controlled release;
+- training assignment status and completion evidence;
+- controlled-copy issuance and recall.
+
+The server listens only on the local computer and protects write forms against
+cross-site requests. It does not provide user authentication or electronic
+signatures. Use it for a single-user evaluation or controlled workstation. Add
+central identity, authorization, TLS, session auditing, and validated signature
+controls before making it available to multiple users or using it as a formal
+approval system.
+
 ## Core workflow
 
 1. Create a row in `documents` with a stable document number and named owner.
@@ -111,7 +134,9 @@ central identity, or formal electronic signatures are required.
 - `scripts/init_db.py` — safe database bootstrap command.
 - `scripts/migrate_db.py` — backup and ordered in-place schema migration command.
 - `scripts/release_revision.py` — controlled, transactional revision release.
+- `scripts/web_app.py` — local browser interface and workflow actions.
 - `sql/migrations/` — ordered upgrades for existing databases.
+- `web/static/` — interface styling.
 - `examples/sample_data.sql` — fictional starter roles, users, and a procedure.
 - `tests/test_database.py` — workflow and control tests.
 - `docs/data-dictionary.md` — table-by-table data dictionary.
